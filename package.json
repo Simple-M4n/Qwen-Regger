@@ -1,0 +1,21 @@
+{
+  "name": "qwen-regger",
+  "version": "1.0.0",
+  "description": "Automated chat.qwen.ai account registration configured through config.json and CLI flags",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "qwen-regger": "./qwen-regger.js"
+  },
+  "scripts": {
+    "start": "node qwen-regger.js",
+    "selftest": "node qwen-regger.js --selftest",
+    "test": "node test/proxy.mjs && node test/otp.mjs && node test/slider-analyzer.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.65.1"
+  }
+}

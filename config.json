@@ -1,0 +1,18 @@
+{
+  "headless": true,
+  "proxy": null,
+  "proxyType": null,
+  "proxyFile": null,
+  "proxyBypass": null,
+  "browser": null,
+  "provider": "tempmail",
+  "code": null,
+  "email": null,
+  "captchaRounds": 2,
+  "autoAttempts": 10,
+  "captchaTimeout": 300,
+  "emailTimeout": 180,
+  "interval": 65,
+  "insecure": false,
+  "verbose": false
+}

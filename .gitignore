@@ -1,0 +1,25 @@
+# Real credentials and local state — never commit these.
+accounts.local.json
+slider-memory.json
+proxies*.txt
+proxy-list*
+*.token
+*.jwt
+*.log
+debug/
+tmp/
+.tmp/
+
+# Local publishing helper
+push-to-github.ps1
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Dependencies
+node_modules/
+npm-debug.log*
+*.tgz
