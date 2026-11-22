@@ -5,8 +5,9 @@
 import { parseArgs } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { loadConfig, ACCOUNTS_FILE } from './lib/store.js';
+import { loadConfig, writeJson, ACCOUNTS_FILE } from './lib/store.js';
 import { buildProvider } from './lib/mail.js';
 import { Transport, sleep } from './lib/http.js';
 import { QwenClient } from './lib/qwen.js';
@@ -57,12 +58,12 @@ Network / browser:
                            (used when --proxy is a bare host:port)
   --proxy-file FILE        one proxy per line (or JSON array), rotated per account
   --proxy-bypass LIST      comma-separated hosts bypassing the proxy (browser)
-  --insecure               skip TLS certificate verification
+  --insecure               skip TLS checks in Node and the browser
   --browser CHANNEL        chrome | msedge | chromium (default: autodetect)
   --headed                 visible browser window instead of headless
 
 Misc:
-  --selftest               connectivity + mailbox smoke test, no registration
+  --selftest               network/mailbox/browser checks (creates a test mailbox)
   --verbose                detailed slider/mail/network diagnostics
   -h, --help               this help
 `;
@@ -72,10 +73,54 @@ function fail(msg) {
   process.exit(2);
 }
 
-function parseCli() {
+// Number.parseInt silently accepts "3abc" and "1e3". Configuration is user
+// input too, so apply the same strict check to CLI values and config values.
+function intFlag(raw, name, min) {
+  const text = String(raw);
+  if (!/^\d+$/.test(text)) fail(`${name} must be an integer >= ${min}`);
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < min) fail(`${name} must be an integer >= ${min}`);
+  return value;
+}
+
+// parseArgs treats "--interval -1" as an ambiguous option instead of a value,
+// so hidden invalid values never reach intFlag(). Join negative numbers to
+// their option before parsing to keep validation messages consistent.
+const NUMERIC_OPTIONS = new Set([
+  'count',
+  'interval',
+  'auto-attempts',
+  'captcha-rounds',
+  'captcha-timeout',
+  'email-timeout',
+]);
+
+function normalizeArgv(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    if (
+      arg.startsWith('--') &&
+      !arg.includes('=') &&
+      NUMERIC_OPTIONS.has(arg.slice(2)) &&
+      typeof next === 'string' &&
+      /^-\d/.test(next)
+    ) {
+      out.push(`${arg}=${next}`);
+      i += 1;
+    } else {
+      out.push(arg);
+    }
+  }
+  return out;
+}
+
+export function parseCli() {
   let parsed;
   try {
     parsed = parseArgs({
+      args: normalizeArgv(process.argv.slice(2)),
       options: {
         config: { type: 'string' },
         count: { type: 'string' },
@@ -116,11 +161,11 @@ function parseCli() {
     process.exit(0);
   }
 
-  const defaults = loadConfig(opt.config ? path.resolve(opt.config) : undefined);
+  const configPath = opt.config ? path.resolve(opt.config) : undefined;
+  const defaults = loadConfig(configPath);
   const pick = (key, fallback) => (opt[key] !== undefined ? opt[key] : fallback);
 
-  const count = Number.parseInt(pick('count', '1'), 10);
-  if (!Number.isInteger(count) || count < 1) fail('--count must be a positive integer');
+  const count = intFlag(pick('count', 1), '--count', 1);
 
   const provider = String(pick('provider', defaults.provider || 'tempmail')).toLowerCase();
   if (!['mailtm', 'tempmail', 'guerrilla', 'cfmail', 'code'].includes(provider)) {
@@ -130,22 +175,15 @@ function parseCli() {
   const code = opt.code || defaults.code || null;
   if (provider === 'code') {
     if (!email || !code) fail('provider=code requires --email and --code');
-    if (!/^\d{6}$/.test(String(code).replace(/\D/g, ''))) fail('--code must be a 6-digit OTP');
+    if (!/^\d{6}$/.test(String(code))) fail('--code must be a 6-digit OTP');
     if (count > 1) fail('provider=code can only be used with --count 1');
   }
 
-  const interval = Number.parseInt(pick('interval', String(defaults.interval ?? 65)), 10);
-  if (!Number.isInteger(interval) || interval < 0) fail('--interval must be a non-negative integer');
-
-  const autoAttempts = Number.parseInt(pick('auto-attempts', String(defaults.autoAttempts ?? 10)), 10);
-  if (!Number.isInteger(autoAttempts) || autoAttempts < 1) fail('--auto-attempts must be a positive integer');
-  const captchaRounds = Number.parseInt(pick('captcha-rounds', String(defaults.captchaRounds ?? 2)), 10);
-  if (!Number.isInteger(captchaRounds) || captchaRounds < 1) fail('--captcha-rounds must be a positive integer');
-
-  const captchaTimeout = Number.parseInt(pick('captcha-timeout', String(defaults.captchaTimeout ?? 300)), 10);
-  const emailTimeout = Number.parseInt(pick('email-timeout', String(defaults.emailTimeout ?? 180)), 10);
-  if (!Number.isInteger(captchaTimeout) || captchaTimeout < 1) fail('--captcha-timeout must be a positive integer');
-  if (!Number.isInteger(emailTimeout) || emailTimeout < 1) fail('--email-timeout must be a positive integer');
+  const interval = intFlag(pick('interval', defaults.interval ?? 65), '--interval', 0);
+  const autoAttempts = intFlag(pick('auto-attempts', defaults.autoAttempts ?? 10), '--auto-attempts', 1);
+  const captchaRounds = intFlag(pick('captcha-rounds', defaults.captchaRounds ?? 2), '--captcha-rounds', 1);
+  const captchaTimeout = intFlag(pick('captcha-timeout', defaults.captchaTimeout ?? 300), '--captcha-timeout', 1);
+  const emailTimeout = intFlag(pick('email-timeout', defaults.emailTimeout ?? 180), '--email-timeout', 1);
 
   let proxyType;
   let proxy;
@@ -171,11 +209,11 @@ function parseCli() {
     provider,
     email,
     code,
-    out: path.resolve(pick('out', ACCOUNTS_FILE)),
+    out: path.resolve(pick('out', defaults.out || ACCOUNTS_FILE)),
     interval,
-    mailBase: opt['mail-base'] || null,
-    mailPass: opt['mail-pass'] || null,
-    mailDomain: opt['mail-domain'] || null,
+    mailBase: pick('mail-base', defaults.mailBase || null),
+    mailPass: pick('mail-pass', defaults.mailPass || null),
+    mailDomain: pick('mail-domain', defaults.mailDomain || null),
     autoAttempts,
     captchaRounds,
     captchaTimeoutMs: captchaTimeout * 1000,
@@ -187,7 +225,7 @@ function parseCli() {
     proxyBypass: pick('proxy-bypass', defaults.proxyBypass || null),
     insecure: opt.insecure !== undefined ? !!opt.insecure : !!defaults.insecure,
     browser: opt.browser || defaults.browser || null,
-    headless: opt.headed ? false : true,
+    headless: opt.headed ? false : defaults.headless !== false,
     selftest: !!opt.selftest,
     verbose: opt.verbose !== undefined ? !!opt.verbose : !!defaults.verbose,
   };
@@ -250,7 +288,7 @@ async function selftest(cfg) {
   }
 
   log(failures === 0 ? 'selftest: all checks passed' : `selftest: ${failures} check(s) failed`);
-  process.exit(failures === 0 ? 0 : 1);
+  process.exitCode = failures === 0 ? 0 : 1;
 }
 
 function loadResults(file) {
@@ -263,10 +301,7 @@ function loadResults(file) {
 }
 
 function saveResults(file, results) {
-  const tmp = `${file}.tmp`;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(tmp, JSON.stringify(results, null, 2), 'utf8');
-  fs.renameSync(tmp, file);
+  writeJson(file, results);
 }
 
 async function registerOne(cfg, provider, rec) {
@@ -280,11 +315,13 @@ async function registerOne(cfg, provider, rec) {
     proxyBypass: cfg.proxyBypass,
     channel: cfg.browser,
     headless: cfg.headless,
+    insecure: cfg.insecure,
     autoAttempts: cfg.autoAttempts,
     captchaRounds: cfg.captchaRounds,
     timeoutMs: cfg.captchaTimeoutMs,
     onRetry,
     log: cfg.verbose ? (msg) => log(msg) : () => {},
+    progress: (msg) => log(msg),
     getCode: (detailLog) =>
       provider.waitForVerifyMail(inbox, {
         timeout: cfg.emailTimeoutMs,
@@ -328,6 +365,7 @@ async function main() {
 
   const results = loadResults(cfg.out);
   let ok = 0;
+  let stop = false;
 
   for (let i = 1; i <= cfg.count; i += 1) {
     const rec = {
@@ -349,9 +387,7 @@ async function main() {
       log(`FAILED: ${rec.error}`);
       if (err.kind === 'waf_block' && !rotator) {
         log('Aliyun WAF blocked this IP — stopping. Use --proxy-file to rotate exits.');
-        results.push(rec);
-        saveResults(cfg.out, results);
-        break;
+        stop = true;
       }
     }
 
@@ -361,6 +397,7 @@ async function main() {
     } catch (err) {
       log(`could not write ${cfg.out}: ${err.message}`);
     }
+    if (stop) break;
 
     if (i < cfg.count) {
       log(`rate-limit pause ${cfg.interval}s before the next account...`);
@@ -376,10 +413,14 @@ async function main() {
 
   const done = results.filter((r) => r.status === 'complete').length;
   log(`summary: ${done} complete in ${cfg.out} (this run: ${ok}/${cfg.count})`);
-  process.exit(ok === cfg.count ? 0 : 1);
+  process.exitCode = ok === cfg.count ? 0 : 1;
 }
 
-main().catch((err) => {
-  console.error(`fatal: ${err.stack || err.message || err}`);
-  process.exit(1);
-});
+// Exporting parseCli keeps the CLI testable without starting a registration.
+const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error(`fatal: ${err.stack || err.message || err}`);
+    process.exitCode = 1;
+  });
+}

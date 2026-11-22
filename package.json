@@ -13,7 +13,9 @@
   "scripts": {
     "start": "node qwen-regger.js",
     "selftest": "node qwen-regger.js --selftest",
-    "test": "node test/proxy.mjs && node test/otp.mjs && node test/slider-analyzer.mjs"
+    "test": "node --test test/proxy.mjs test/otp.mjs test/config.mjs test/cli.mjs test/http.mjs test/mail.mjs",
+    "test:unit": "node --test test/proxy.mjs test/otp.mjs test/config.mjs test/cli.mjs test/http.mjs test/mail.mjs",
+    "test:slider": "node test/slider-analyzer.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.65.1"

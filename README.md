@@ -31,10 +31,13 @@ node qwen-regger.js --provider code --email you@example.com --code 123456
 ```
 
 Every CLI flag overrides `config.json` for that run only. To make a setting
-permanent, edit `config.json`.
+permanent, edit `config.json`. Numeric settings (`count`, `interval`,
+`autoAttempts`, `captchaRounds`, `captchaTimeout`, `emailTimeout`) are validated
+strictly: `3abc`, `2.5`, `1e3` and negative values are rejected. A fixed
+`--code` must be exactly six digits; punctuation is not stripped.
 
-Output is quiet by default. Add `--verbose` or `"verbose": true` in config for
-detailed solver, mail and browser diagnostics.
+Stage progress is printed by default. Add `--verbose` or `"verbose": true` in
+config for detailed solver, mail and browser diagnostics.
 
 ## config.json
 
@@ -46,6 +49,10 @@ detailed solver, mail and browser diagnostics.
 | `proxyFile` | `null` | File with a proxy list, rotated once per account |
 | `proxyBypass` | `null` | Comma-separated hosts bypassing the proxy (browser only) |
 | `browser` | `null` | `null` = autodetect, otherwise `chrome`, `msedge`, `chromium` |
+| `mailBase` | `null` | cfmail instance base URL |
+| `mailPass` | `null` | cfmail site password |
+| `mailDomain` | `null` | cfmail / guerrilla address domain |
+| `out` | `null` | accounts file (default: outside the repo) |
 | `provider` | `"tempmail"` | `mailtm`, `tempmail`, `guerrilla`, `cfmail`, `code` |
 | `email` | `null` | Email for `provider=code` |
 | `code` | `null` | Fixed 6-digit OTP for `provider=code` |
@@ -54,7 +61,7 @@ detailed solver, mail and browser diagnostics.
 | `captchaTimeout` | `300` | Max wait for WAF/OTP stage, seconds |
 | `emailTimeout` | `180` | Wait for the OTP email, seconds |
 | `interval` | `65` | Pause in seconds between registrations |
-| `insecure` | `false` | Skip TLS certificate verification |
+| `insecure` | `false` | Skip TLS checks in Node requests and in the browser |
 | `verbose` | `false` | Print detailed diagnostics |
 
 Example:
@@ -87,7 +94,8 @@ still drives the real signup, waits for the code stage and submits the supplied
 
 Supported types: `http`, `https`, `socks4`, `socks4a`, `socks5`, `socks5h`.
 The scheme in the URL selects the type; a bare `host:port` is treated as HTTP
-unless `proxyType` (or `--proxy-type`) says otherwise.
+unless `proxyType` (or `--proxy-type`) says otherwise. IPv6 addresses are
+accepted in brackets, e.g. `socks5://[::1]:1080` or `[::1]:1080` in a proxy file.
 
 ```json
 "proxy": "http://user:pass@proxy.example:8080"
@@ -131,6 +139,7 @@ Run `node qwen-regger.js --help` for the full list. Main flags:
 - `--auto-attempts N`, `--captcha-rounds N`, `--captcha-timeout SEC`
 - `--email-timeout SEC`
 - `--proxy URL`, `--proxy-type TYPE`, `--proxy-file LIST`, `--proxy-bypass LIST`
+- `--mail-base URL`, `--mail-pass PASS`, `--mail-domain DOM`
 - `--browser CHANNEL`, `--headed`, `--insecure`
 - `--out FILE`, `--selftest`, `--verbose`
 
@@ -140,16 +149,25 @@ Registered accounts are written outside the repository by default
 (`%APPDATA%\Qwen-Regger\accounts.json` on Windows, equivalent config directory
 elsewhere). Override with `--out` or `QWEN_REGGER_ACCOUNTS`. The committed
 `accounts.json` is an empty `[]` template; no real accounts, JWTs, passwords or
-logs belong in the repository. The solver also keeps a small
-`slider-memory.json` next to `accounts.json`: it stores only a perceptual hash
-of reused puzzle images and the gap that passed, never image bytes or account
-data.
+logs belong in the repository. The solver separately keeps a small
+`slider-memory.json` at `%APPDATA%\Qwen-Regger\slider-memory.json` on Windows
+(or `~/.config/Qwen-Regger/slider-memory.json` elsewhere). That path is fixed:
+`--out` and `QWEN_REGGER_ACCOUNTS` do not move it, and `XDG_CONFIG_HOME` is not
+consulted. It stores only a perceptual hash of reused puzzle images and the gap
+that passed, never image bytes or account data.
+
+`--insecure` is applied to Node requests, the Playwright browser context and the
+solver's image fetches. `captchaTimeout` is validated on startup, but the
+browser's wait for the OTP stage is currently capped at 30 seconds; larger
+values do not extend that particular wait.
 
 ## Tests
 
 ```bash
-npm test
-node qwen-regger.js --selftest
+npm test            # browser-free unit checks (node:test)
+npm run test:unit   # same set
+npm run test:slider # optional synthetic slider-analyzer check (needs a browser)
+node qwen-regger.js --selftest   # network/mailbox/browser smoke test (creates a mailbox)
 ```
 
 The slider solver writes no debug files by default. Set `QWEN_SLIDER_DEBUG=1`

@@ -32,10 +32,14 @@ node qwen-regger.js --provider code --email you@example.com --code 123456
 ```
 
 Каждый флаг CLI переопределяет `config.json` только для текущего запуска.
-Чтобы сделать настройку постоянной, измените `config.json`.
+Чтобы сделать настройку постоянной, измените `config.json`. Числовые настройки
+(`count`, `interval`, `autoAttempts`, `captchaRounds`, `captchaTimeout`,
+`emailTimeout`) проверяются строго: `3abc`, `2.5`, `1e3` и отрицательные значения
+отклоняются. Фиксированный `--code` должен содержать ровно шесть цифр; лишние
+символы не отбрасываются.
 
-Вывод по умолчанию тихий. Добавьте `--verbose` или `"verbose": true` в конфиге
-для подробной диагностики слайдера, почты и браузера.
+По умолчанию выводятся основные этапы работы. Добавьте `--verbose` или
+`"verbose": true` в конфиге для подробной диагностики слайдера, почты и браузера.
 
 ## config.json
 
@@ -47,6 +51,10 @@ node qwen-regger.js --provider code --email you@example.com --code 123456
 | `proxyFile` | `null` | Файл со списком прокси, смена на каждый аккаунт |
 | `proxyBypass` | `null` | Хосты через запятую, минующие прокси (только браузер) |
 | `browser` | `null` | `null` — автоопределение, иначе `chrome`, `msedge`, `chromium` |
+| `mailBase` | `null` | URL экземпляра cfmail |
+| `mailPass` | `null` | пароль сайта cfmail |
+| `mailDomain` | `null` | домен адресов cfmail / guerrilla |
+| `out` | `null` | файл аккаунтов (по умолчанию вне репозитория) |
 | `provider` | `"tempmail"` | `mailtm`, `tempmail`, `guerrilla`, `cfmail`, `code` |
 | `email` | `null` | Email для `provider=code` |
 | `code` | `null` | Фиксированный 6-значный код для `provider=code` |
@@ -55,7 +63,7 @@ node qwen-regger.js --provider code --email you@example.com --code 123456
 | `captchaTimeout` | `300` | Максимальное ожидание WAF/кода, секунды |
 | `emailTimeout` | `180` | Ожидание письма с кодом, секунды |
 | `interval` | `65` | Пауза в секундах между регистрациями |
-| `insecure` | `false` | Не проверять TLS-сертификаты |
+| `insecure` | `false` | Не проверять TLS в Node и в браузере |
 | `verbose` | `false` | Подробные диагностические сообщения |
 
 Пример:
@@ -88,7 +96,8 @@ node qwen-regger.js --provider code --email you@example.com --code 123456
 
 Поддерживаемые типы: `http`, `https`, `socks4`, `socks4a`, `socks5`, `socks5h`.
 Тип выбирается схемой в URL; адрес вида `host:port` считается HTTP, если не
-указан `proxyType` (или флаг `--proxy-type`).
+указан `proxyType` (или флаг `--proxy-type`). IPv6-адреса записываются в
+квадратных скобках: `socks5://[::1]:1080` или `[::1]:1080` в файле прокси.
 
 ```json
 "proxy": "http://user:pass@proxy.example:8080"
@@ -124,6 +133,7 @@ node qwen-regger.js --proxy none --count 1   # отключить прокси �
 - `--auto-attempts N`, `--captcha-rounds N`, `--captcha-timeout SEC`
 - `--email-timeout SEC`
 - `--proxy URL`, `--proxy-type TYPE`, `--proxy-file LIST`, `--proxy-bypass LIST`
+- `--mail-base URL`, `--mail-pass PASS`, `--mail-domain DOM`
 - `--browser CHANNEL`, `--headed`, `--insecure`
 - `--out FILE`, `--selftest`, `--verbose`
 
@@ -142,16 +152,26 @@ JSON-массивом) в локальный файл и передайте `--p
 (`%APPDATA%\Qwen-Regger\accounts.json` в Windows, аналогичный каталог конфига
 в других системах). Переопределить можно флагом `--out` или переменной
 `QWEN_REGGER_ACCOUNTS`. Файл `accounts.json` в репозитории — пустой шаблон `[]`;
-реальные аккаунты, JWT, пароли и логи в репозиторий не добавляются. Рядом с
-`accounts.json` решатель хранит небольшой `slider-memory.json`: только перцептивный
-хеш повторяющихся изображений пазла и сработавшую координату, без самих картинок
-и данных аккаунтов.
+реальные аккаунты, JWT, пароли и логи в репозиторий не добавляются. Отдельно
+решатель хранит небольшой `slider-memory.json` по фиксированному пути
+`%APPDATA%\Qwen-Regger\slider-memory.json` в Windows (или
+`~/.config/Qwen-Regger/slider-memory.json` в других системах). Флаг `--out` и
+переменная `QWEN_REGGER_ACCOUNTS` не меняют этот путь, `XDG_CONFIG_HOME` не
+используется. Там только перцептивный хеш повторяющихся изображений пазла и
+сработавшая координата, без самих картинок и данных аккаунтов.
+
+`--insecure` применяется к запросам Node, контексту Playwright и загрузке
+изображений решателем. `captchaTimeout` проверяется при запуске, но ожидание
+этапа кода в браузере сейчас ограничено 30 секундами; большие значения этот
+период не увеличивают.
 
 ## Тесты
 
 ```bash
-npm test
-node qwen-regger.js --selftest
+npm test            # юнит-проверки без браузера (node:test)
+npm run test:unit   # тот же набор
+npm run test:slider # дополнительная проверка анализатора (нужен браузер)
+node qwen-regger.js --selftest   # сеть/почта/браузер (создаёт тестовый ящик)
 ```
 
 Решатель слайдера по умолчанию не пишет отладочные файлы. Установите
